@@ -83,7 +83,12 @@ module ScoutApm
         # Install #log tracing
         if Utils::KlassHelper.defined?("ActiveRecord::ConnectionAdapters::AbstractAdapter")
           ::ActiveRecord::ConnectionAdapters::AbstractAdapter.module_eval do
-            include ::ScoutApm::Instruments::ActiveRecordInstruments
+            if ScoutApm::Environment.instance.supports_module_prepend?
+              prepend ::ScoutApm::Instruments::ActiveRecordInstruments
+            else
+              include ::ScoutApm::Instruments::ActiveRecordInstruments
+            end
+
             include ::ScoutApm::Tracer
           end
         end
@@ -108,14 +113,24 @@ module ScoutApm
         if Utils::KlassHelper.defined?("ActiveRecord::Querying")
           ::ActiveRecord::Querying.module_eval do
             include ::ScoutApm::Tracer
-            include ::ScoutApm::Instruments::ActiveRecordQueryingInstruments
+
+            if ScoutApm::Environment.instance.supports_module_prepend?
+              prepend ::ScoutApm::Instruments::ActiveRecordQueryingInstruments
+            else
+              include ::ScoutApm::Instruments::ActiveRecordQueryingInstruments
+            end
           end
         end
 
         if Utils::KlassHelper.defined?("ActiveRecord::FinderMethods")
           ::ActiveRecord::FinderMethods.module_eval do
             include ::ScoutApm::Tracer
-            include ::ScoutApm::Instruments::ActiveRecordFinderMethodsInstruments
+
+            if ScoutApm::Environment.instance.supports_module_prepend?
+              prepend ::ScoutApm::Instruments::ActiveRecordFinderMethodsInstruments
+            else
+              include ::ScoutApm::Instruments::ActiveRecordFinderMethodsInstruments
+            end
           end
         end
 
@@ -147,6 +162,10 @@ module ScoutApm
     #
     ################################################################################
     module ActiveRecordInstruments
+      def self.prepended(instrumented_class)
+        ScoutApm::Agent.instance.context.logger.info "Instrumenting #{instrumented_class.inspect}"
+      end
+
       def self.included(instrumented_class)
         ScoutApm::Agent.instance.context.logger.info "Instrumenting #{instrumented_class.inspect}"
         instrumented_class.class_eval do
@@ -157,7 +176,7 @@ module ScoutApm
         end
       end
 
-      def log_with_scout_instruments(*args, &block)
+      def log(*args, &block)
         # Extract data from the arguments
         sql, name = args
         metric_name = Utils::ActiveRecordMetricName.new(sql, name)
@@ -188,7 +207,11 @@ module ScoutApm
           end
           current_layer.desc.merge(desc)
 
-          log_without_scout_instruments(*args, &block)
+          if ScoutApm::Environment.instance.supports_module_prepend?
+            super
+          else
+            log_without_scout_instruments(*args, &block)
+          end
 
         # OR: Start a new layer, we didn't pick up instrumentation earlier in the stack.
         else
@@ -196,11 +219,20 @@ module ScoutApm
           layer.desc = desc
           req.start_layer(layer)
           begin
-            log_without_scout_instruments(*args, &block)
+            if ScoutApm::Environment.instance.supports_module_prepend?
+              super
+            else
+              log_without_scout_instruments(*args, &block)
+            end
           ensure
             req.stop_layer
           end
         end
+      end
+
+      if !ScoutApm::Environment.instance.supports_module_prepend?
+        alias_method :log_with_scout_instruments, :log
+        remove_method :log
       end
     end
 
@@ -224,6 +256,10 @@ module ScoutApm
     ################################################################################
 
     module ActiveRecordQueryingInstruments
+      def self.prepended(instrumented_class)
+        ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::Querying - #{instrumented_class.inspect}"
+      end
+
       def self.included(instrumented_class)
         ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::Querying - #{instrumented_class.inspect}"
         instrumented_class.class_eval do
@@ -234,22 +270,35 @@ module ScoutApm
         end
       end
 
-      def find_by_sql_with_scout_instruments(*args, &block)
+      def find_by_sql(*args, &block)
         req = ScoutApm::RequestManager.lookup
         layer = ScoutApm::Layer.new("ActiveRecord", Utils::ActiveRecordMetricName::DEFAULT_METRIC)
         layer.annotate_layer(:ignorable => true)
         req.start_layer(layer)
         req.ignore_children!
         begin
-          find_by_sql_without_scout_instruments(*args, &block)
+          if ScoutApm::Environment.instance.supports_module_prepend?
+            super
+          else
+            find_by_sql_without_scout_instruments(*args, &block)
+          end
         ensure
           req.acknowledge_children!
           req.stop_layer
         end
       end
+
+      if !ScoutApm::Environment.instance.supports_module_prepend?
+        alias_method :find_by_sql_with_scout_instruments, :find_by_sql
+        remove_method :find_by_sql
+      end
     end
 
     module ActiveRecordFinderMethodsInstruments
+      def self.prepended(instrumented_class)
+        ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::FinderMethods - #{instrumented_class.inspect}"
+      end
+
       def self.included(instrumented_class)
         ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::FinderMethods - #{instrumented_class.inspect}"
         instrumented_class.class_eval do
@@ -260,7 +309,7 @@ module ScoutApm
         end
       end
 
-      def find_with_associations_with_scout_instruments(*args, &block)
+      def find_with_associations(*args, &block)
         req = ScoutApm::RequestManager.lookup
         layer = ScoutApm::Layer.new("ActiveRecord", Utils::ActiveRecordMetricName::DEFAULT_METRIC)
         layer.annotate_layer(:ignorable => true)
@@ -268,11 +317,20 @@ module ScoutApm
         req.start_layer(layer)
         req.ignore_children!
         begin
-          find_with_associations_without_scout_instruments(*args, &block)
+          if ScoutApm::Environment.instance.supports_module_prepend?
+            super
+          else
+            find_with_associations_without_scout_instruments(*args, &block)
+          end
         ensure
           req.acknowledge_children!
           req.stop_layer
         end
+      end
+
+      if !ScoutApm::Environment.instance.supports_module_prepend?
+        alias_method :find_with_associations_with_scout_instruments, :find_with_associations
+        remove_method :find_with_associations
       end
     end
 
@@ -325,7 +383,7 @@ module ScoutApm
         end
       end
 
-      def update_all_with_scout_instruments(*args, &block)
+      def update_all(*args, &block)
         model = self.name
 
         req = ScoutApm::RequestManager.lookup
@@ -333,14 +391,18 @@ module ScoutApm
         req.start_layer(layer)
         req.ignore_children!
         begin
-          update_all_without_scout_instruments(*args, &block)
+          if ScoutApm::Environment.instance.supports_module_prepend?
+            super
+          else
+            update_all_without_scout_instruments(*args, &block)
+          end
         ensure
           req.acknowledge_children!
           req.stop_layer
         end
       end
 
-      def delete_all_with_scout_instruments(*args, &block)
+      def delete_all(*args, &block)
         model = self.name
 
         req = ScoutApm::RequestManager.lookup
@@ -348,14 +410,18 @@ module ScoutApm
         req.start_layer(layer)
         req.ignore_children!
         begin
-          delete_all_without_scout_instruments(*args, &block)
+          if ScoutApm::Environment.instance.supports_module_prepend?
+            super
+          else
+            delete_all_without_scout_instruments(*args, &block)
+          end
         ensure
           req.acknowledge_children!
           req.stop_layer
         end
       end
 
-      def destroy_all_with_scout_instruments(*args, &block)
+      def destroy_all(*args, &block)
         model = self.name
 
         req = ScoutApm::RequestManager.lookup
@@ -363,11 +429,26 @@ module ScoutApm
         req.start_layer(layer)
         req.ignore_children!
         begin
-          destroy_all_without_scout_instruments(*args, &block)
+          if ScoutApm::Environment.instance.supports_module_prepend?
+            super
+          else
+            destroy_all_without_scout_instruments(*args, &block)
+          end
         ensure
           req.acknowledge_children!
           req.stop_layer
         end
+      end
+
+      if !ScoutApm::Environment.instance.supports_module_prepend?
+        alias_method :update_all_with_scout_instruments, :update_all
+        remove_method :update_all
+
+        alias_method :delete_all_with_scout_instruments, :delete_all
+        remove_method :delete_all
+
+        alias_method :destroy_all_with_scout_instruments, :destroy_all
+        remove_method :destroy_all
       end
     end
   end
