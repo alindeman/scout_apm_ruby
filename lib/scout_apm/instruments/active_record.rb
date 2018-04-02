@@ -113,24 +113,14 @@ module ScoutApm
         if Utils::KlassHelper.defined?("ActiveRecord::Querying")
           ::ActiveRecord::Querying.module_eval do
             include ::ScoutApm::Tracer
-
-            if ScoutApm::Environment.instance.supports_module_prepend?
-              prepend ::ScoutApm::Instruments::ActiveRecordQueryingInstruments
-            else
-              include ::ScoutApm::Instruments::ActiveRecordQueryingInstruments
-            end
+            include ::ScoutApm::Instruments::ActiveRecordQueryingInstruments
           end
         end
 
         if Utils::KlassHelper.defined?("ActiveRecord::FinderMethods")
           ::ActiveRecord::FinderMethods.module_eval do
             include ::ScoutApm::Tracer
-
-            if ScoutApm::Environment.instance.supports_module_prepend?
-              prepend ::ScoutApm::Instruments::ActiveRecordFinderMethodsInstruments
-            else
-              include ::ScoutApm::Instruments::ActiveRecordFinderMethodsInstruments
-            end
+            include ::ScoutApm::Instruments::ActiveRecordFinderMethodsInstruments
           end
         end
 
@@ -138,6 +128,7 @@ module ScoutApm
           ActiveSupport::Notifications.subscribe("instantiation.active_record") do |event_name, start, stop, uuid, payload|
             req = ScoutApm::RequestManager.lookup
             layer = req.current_layer
+            binding.pry
             if layer && layer.type == "ActiveRecord"
               layer.annotate_layer(payload)
             elsif layer
@@ -177,6 +168,8 @@ module ScoutApm
       end
 
       def log(*args, &block)
+        ScoutApm::Agent.instance.context.logger.info "log(#{args.inspect})"
+
         # Extract data from the arguments
         sql, name = args
         metric_name = Utils::ActiveRecordMetricName.new(sql, name)
@@ -185,6 +178,7 @@ module ScoutApm
         # Get current ScoutApm context
         req = ScoutApm::RequestManager.lookup
         current_layer = req.current_layer
+        binding.pry if metric_name.to_s =~ /Post/
 
         # If we call #log, we have a real query to run, and we've already
         # gotten through the cache gatekeeper. Since we want to only trace real
@@ -218,6 +212,7 @@ module ScoutApm
           layer = ScoutApm::Layer.new("ActiveRecord", metric_name)
           layer.desc = desc
           req.start_layer(layer)
+          binding.pry if metric_name.to_s =~ /Post/
           begin
             if ScoutApm::Environment.instance.supports_module_prepend?
               super
@@ -225,6 +220,7 @@ module ScoutApm
               log_without_scout_instruments(*args, &block)
             end
           ensure
+            binding.pry if metric_name.to_s =~ /Post/
             req.stop_layer
           end
         end
@@ -256,10 +252,6 @@ module ScoutApm
     ################################################################################
 
     module ActiveRecordQueryingInstruments
-      def self.prepended(instrumented_class)
-        ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::Querying - #{instrumented_class.inspect}"
-      end
-
       def self.included(instrumented_class)
         ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::Querying - #{instrumented_class.inspect}"
         instrumented_class.class_eval do
@@ -270,35 +262,24 @@ module ScoutApm
         end
       end
 
-      def find_by_sql(*args, &block)
+      def find_by_sql_with_scout_instruments(*args, &block)
+        ScoutApm::Agent.instance.context.logger.info "find_by_sql(#{args.inspect})"
+
         req = ScoutApm::RequestManager.lookup
         layer = ScoutApm::Layer.new("ActiveRecord", Utils::ActiveRecordMetricName::DEFAULT_METRIC)
         layer.annotate_layer(:ignorable => true)
         req.start_layer(layer)
         req.ignore_children!
         begin
-          if ScoutApm::Environment.instance.supports_module_prepend?
-            super
-          else
-            find_by_sql_without_scout_instruments(*args, &block)
-          end
+          find_by_sql_without_scout_instruments(*args, &block)
         ensure
           req.acknowledge_children!
           req.stop_layer
         end
       end
-
-      if !ScoutApm::Environment.instance.supports_module_prepend?
-        alias_method :find_by_sql_with_scout_instruments, :find_by_sql
-        remove_method :find_by_sql
-      end
     end
 
     module ActiveRecordFinderMethodsInstruments
-      def self.prepended(instrumented_class)
-        ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::FinderMethods - #{instrumented_class.inspect}"
-      end
-
       def self.included(instrumented_class)
         ScoutApm::Agent.instance.context.logger.info "Instrumenting ActiveRecord::FinderMethods - #{instrumented_class.inspect}"
         instrumented_class.class_eval do
@@ -309,7 +290,9 @@ module ScoutApm
         end
       end
 
-      def find_with_associations(*args, &block)
+      def find_with_associations_with_scout_instruments(*args, &block)
+        ScoutApm::Agent.instance.context.logger.info "find_with_associations(#{args.inspect})"
+
         req = ScoutApm::RequestManager.lookup
         layer = ScoutApm::Layer.new("ActiveRecord", Utils::ActiveRecordMetricName::DEFAULT_METRIC)
         layer.annotate_layer(:ignorable => true)
@@ -326,11 +309,6 @@ module ScoutApm
           req.acknowledge_children!
           req.stop_layer
         end
-      end
-
-      if !ScoutApm::Environment.instance.supports_module_prepend?
-        alias_method :find_with_associations_with_scout_instruments, :find_with_associations
-        remove_method :find_with_associations
       end
     end
 

@@ -181,7 +181,7 @@ module ScoutApm
 
     # Returns true if this Ruby version supports Module#prepend.
     def supports_module_prepend?
-      false && ruby_2?
+      ruby_2?
     end
 
     # Returns a string representation of the OS (ex: darwin, linux)
